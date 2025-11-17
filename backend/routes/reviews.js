@@ -3,8 +3,53 @@ const router = express.Router();
 const Review = require('../models/Review');
 const Product = require('../models/Product');
 
+// Option 1: Try using a require-compatible version
+let Filter;
+try {
+  // Try CommonJS require first (works with older versions of bad-words)
+  Filter = require('bad-words');
+} catch (e) {
+  console.log('Could not load bad-words via require, will try dynamic import');
+}
+
+// Option 2: If require doesn't work, use dynamic import
+let filterPromise;
+if (!Filter) {
+  filterPromise = (async () => {
+    try {
+      const badWords = await import('bad-words');
+      Filter = badWords.default || badWords.Filter || badWords;
+      console.log('Loaded Filter via import:', typeof Filter);
+    } catch (error) {
+      console.error('Failed to load bad-words:', error);
+    }
+  })();
+}
+
+// Helper function to clean text
+async function cleanText(text) {
+  // Wait for the filter to be initialized if needed
+  if (!Filter && filterPromise) {
+    await filterPromise;
+  }
+  
+  // If we still don't have Filter, just return the text
+  if (!Filter || typeof Filter !== 'function') {
+    console.warn('Filter not available, returning unfiltered text');
+    return text;
+  }
+  
+  try {
+    const filter = new Filter();
+    return filter.clean(text);
+  } catch (error) {
+    console.error('Error filtering text:', error);
+    return text;
+  }
+}
+
 // Get all reviews for a product
-router.get('/product/:productId', async (req, res) => {
+router.get('/:productId', async (req, res) => {
   try {
     const reviews = await Review.find({ product: req.params.productId })
       .sort({ createdAt: -1 })
@@ -18,7 +63,7 @@ router.get('/product/:productId', async (req, res) => {
 });
 
 // Get review statistics for a product
-router.get('/product/:productId/stats', async (req, res) => {
+router.get('/:productId/stats', async (req, res) => {
   try {
     const reviews = await Review.find({ product: req.params.productId });
     
@@ -50,7 +95,7 @@ router.get('/product/:productId/stats', async (req, res) => {
 });
 
 // Check if user has reviewed a product
-router.get('/product/:productId/user/:userId/check', async (req, res) => {
+router.get('/:productId/user/:userId/check', async (req, res) => {
   try {
     const review = await Review.findOne({
       product: req.params.productId,
@@ -68,14 +113,19 @@ router.get('/product/:productId/user/:userId/check', async (req, res) => {
 });
 
 // Create a new review
-router.post('/', async (req, res) => {
+router.post('/:productId', async (req, res) => {
   try {
-    const { productId, userId, userName, userEmail, rating, comment, hasPurchased } = req.body;
+    const { productId } = req.params;
+    const { userId, userName, userEmail, rating, comment, title, verifiedPurchase } = req.body;
 
     // Validate required fields
-    if (!productId || !userId || !userName || !userEmail || !rating || !comment) {
+    if (!userId || !userName || !userEmail || !rating || !comment || !title) {
       return res.status(400).json({ message: 'All fields are required' });
     }
+
+    // Filter profanity from title and comment
+    const cleanTitle = await cleanText(title);
+    const cleanComment = await cleanText(comment);
 
     // Check if product exists
     const product = await Product.findById(productId);
@@ -90,18 +140,18 @@ router.post('/', async (req, res) => {
     });
 
     if (existingReview) {
-      return res.status(400).json({ message: 'You have already reviewed this product' });
+      return res.status(400).json({ message: 'You have already reviewed this product. You can update your existing review.' });
     }
 
     // Create review
     const review = new Review({
       product: productId,
       user: userId,
-      userName,
-      userEmail,
+      name: userName,
       rating: Number(rating),
-      comment,
-      hasPurchased: hasPurchased || false
+      title: cleanTitle,
+      comment: cleanComment,
+      verifiedPurchase: verifiedPurchase || false
     });
 
     await review.save();
@@ -122,7 +172,7 @@ router.post('/', async (req, res) => {
 // Update a review (user can only update their own)
 router.put('/:reviewId', async (req, res) => {
   try {
-    const { userId, rating, comment } = req.body;
+    const { userId, rating, comment, title } = req.body;
     
     const review = await Review.findById(req.params.reviewId);
     
@@ -135,9 +185,16 @@ router.put('/:reviewId', async (req, res) => {
       return res.status(403).json({ message: 'You can only update your own reviews' });
     }
 
-    // Update review
-    review.rating = rating || review.rating;
-    review.comment = comment || review.comment;
+    // Filter profanity from title and comment if provided
+    if (title) {
+      review.title = await cleanText(title);
+    }
+    if (comment) {
+      review.comment = await cleanText(comment);
+    }
+    if (rating) {
+      review.rating = Number(rating);
+    }
     
     await review.save();
 
