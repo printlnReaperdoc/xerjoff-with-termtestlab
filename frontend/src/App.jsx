@@ -9,6 +9,7 @@ import Admin from './pages/Admin';
 import Sales from './pages/Sales';
 import ManageProducts from './pages/ManageProducts';
 import ManageTransactions from './pages/ManageTransactions';
+import ManageReviews from './pages/ManageReviews';
 import Cart from './pages/Cart';
 import Header from './Header';
 
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/admin/sales" element={<Sales />} />
         <Route path="/admin/products" element={<ManageProducts />} />
         <Route path="/admin/transactions" element={<ManageTransactions />} />
+        <Route path="admin/reviews" element={<ManageReviews />} />
         <Route path="/cart" element={<Cart />} />
       </Routes>
     </Router>

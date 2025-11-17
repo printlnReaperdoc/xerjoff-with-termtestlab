@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Review = require('../models/Review');
 const Product = require('../models/Product');
+const Transaction = require('../models/Transaction');
 
 // Option 1: Try using a require-compatible version
 let Filter;
@@ -47,6 +48,126 @@ async function cleanText(text) {
     return text;
   }
 }
+
+// Helper function to check if user has completed transaction for product
+async function hasCompletedPurchase(userId, productId) {
+  try {
+    // Find all completed transactions for this user
+    const completedTransactions = await Transaction.find({
+      userId: userId,  // Note: schema uses userId, not user
+      status: 'completed'
+    });
+    
+    console.log(`Found ${completedTransactions.length} completed transactions for user ${userId}`);
+    
+    // Check if any of these transactions contain the product
+    for (const transaction of completedTransactions) {
+      if (transaction.items && Array.isArray(transaction.items)) {
+        const hasProduct = transaction.items.some(item => {
+          // Schema uses productId field in items array
+          const itemProductId = item.productId ? item.productId.toString() : null;
+          const targetProductId = productId.toString();
+          const match = itemProductId === targetProductId;
+          if (match) {
+            console.log(`Found matching product in transaction ${transaction._id}`);
+          }
+          return match;
+        });
+        
+        if (hasProduct) {
+          console.log(`✓ User ${userId} has completed purchase for product ${productId}`);
+          return true;
+        }
+      }
+    }
+    
+    console.log(`✗ User ${userId} does NOT have completed purchase for product ${productId}`);
+    return false;
+  } catch (error) {
+    console.error('Error checking completed purchase:', error);
+    return false;
+  }
+}
+
+// Get ALL reviews from the database (for admin) with product details populated
+router.get('/all/reviews', async (req, res) => {
+  try {
+    const reviews = await Review.find({})
+      .sort({ createdAt: -1 })
+      .populate('user', 'name email')
+      .populate('product', 'name image price');
+    
+    res.json(reviews);
+  } catch (error) {
+    console.error('Error fetching all reviews:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Debug endpoint - Check user's transactions for a product
+router.get('/debug/user/:userId/product/:productId/transactions', async (req, res) => {
+  try {
+    const { userId, productId } = req.params;
+    
+    // Get all transactions for this user (using userId field from schema)
+    const allTransactions = await Transaction.find({ userId: userId });
+    
+    // Get completed transactions
+    const completedTransactions = await Transaction.find({
+      userId: userId,
+      status: 'completed'
+    });
+    
+    // Check which transactions have this product (using productId field from items)
+    const transactionsWithProduct = allTransactions.filter(transaction => {
+      if (transaction.items && Array.isArray(transaction.items)) {
+        return transaction.items.some(item => {
+          const itemProductId = item.productId ? item.productId.toString() : null;
+          return itemProductId === productId.toString();
+        });
+      }
+      return false;
+    });
+    
+    // Check completed transactions with this product
+    const completedWithProduct = completedTransactions.filter(transaction => {
+      if (transaction.items && Array.isArray(transaction.items)) {
+        return transaction.items.some(item => {
+          const itemProductId = item.productId ? item.productId.toString() : null;
+          return itemProductId === productId.toString();
+        });
+      }
+      return false;
+    });
+    
+    res.json({
+      userId,
+      productId,
+      totalTransactions: allTransactions.length,
+      completedTransactions: completedTransactions.length,
+      transactionsWithThisProduct: transactionsWithProduct.length,
+      completedTransactionsWithThisProduct: completedWithProduct.length,
+      allTransactionsDetails: allTransactions.map(t => ({
+        _id: t._id,
+        status: t.status,
+        items: t.items,
+        createdAt: t.createdAt,
+        completedAt: t.completedAt
+      })),
+      completedWithProductDetails: completedWithProduct.map(t => ({
+        _id: t._id,
+        status: t.status,
+        items: t.items,
+        createdAt: t.createdAt,
+        completedAt: t.completedAt
+      })),
+      canReview: await hasCompletedPurchase(userId, productId)
+    });
+  } catch (error) {
+    console.error('Error in debug endpoint:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
 
 // Get all reviews for a product
 router.get('/:productId', async (req, res) => {
@@ -94,17 +215,31 @@ router.get('/:productId/stats', async (req, res) => {
   }
 });
 
-// Check if user has reviewed a product
+// Check if user has reviewed a product AND if they have completed purchase
 router.get('/:productId/user/:userId/check', async (req, res) => {
   try {
+    const { productId, userId } = req.params;
+    
+    console.log(`Checking review eligibility for user ${userId} and product ${productId}`);
+    
+    // Check if user already reviewed this product
     const review = await Review.findOne({
-      product: req.params.productId,
-      user: req.params.userId
+      product: productId,
+      user: userId
     });
+    
+    console.log(`User has reviewed: ${!!review}`);
+    
+    // Check if user has completed purchase
+    const hasCompletedTransaction = await hasCompletedPurchase(userId, productId);
+    
+    console.log(`User has completed purchase: ${hasCompletedTransaction}`);
     
     res.json({ 
       hasReviewed: !!review,
-      review: review || null
+      review: review || null,
+      canReview: hasCompletedTransaction,
+      hasCompletedPurchase: hasCompletedTransaction
     });
   } catch (error) {
     console.error('Error checking review:', error);
@@ -112,7 +247,7 @@ router.get('/:productId/user/:userId/check', async (req, res) => {
   }
 });
 
-// Create a new review
+// Create a new review (only if user has completed transaction)
 router.post('/:productId', async (req, res) => {
   try {
     const { productId } = req.params;
@@ -121,6 +256,14 @@ router.post('/:productId', async (req, res) => {
     // Validate required fields
     if (!userId || !userName || !userEmail || !rating || !comment || !title) {
       return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    // Check if user has completed purchase
+    const hasCompletedTransaction = await hasCompletedPurchase(userId, productId);
+    if (!hasCompletedTransaction) {
+      return res.status(403).json({ 
+        message: 'You can only review products you have purchased and received (transaction status: completed)' 
+      });
     }
 
     // Filter profanity from title and comment
@@ -143,7 +286,7 @@ router.post('/:productId', async (req, res) => {
       return res.status(400).json({ message: 'You have already reviewed this product. You can update your existing review.' });
     }
 
-    // Create review
+    // Create review with verified purchase set to true since we verified the transaction
     const review = new Review({
       product: productId,
       user: userId,
@@ -151,7 +294,7 @@ router.post('/:productId', async (req, res) => {
       rating: Number(rating),
       title: cleanTitle,
       comment: cleanComment,
-      verifiedPurchase: verifiedPurchase || false
+      verifiedPurchase: true // Always true since we verified the completed transaction
     });
 
     await review.save();

@@ -9,6 +9,8 @@ export default function ProductReviews({ productId }) {
   const [showReviewForm, setShowReviewForm] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [userReview, setUserReview] = useState(null);
+  const [canReview, setCanReview] = useState(false);
+  const [hasCompletedPurchase, setHasCompletedPurchase] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [newReview, setNewReview] = useState({
     rating: 5,
@@ -78,10 +80,28 @@ export default function ProductReviews({ productId }) {
         if (data.hasReviewed && data.review) {
           setUserReview(data.review);
         }
+        // Set whether user can review (has completed purchase)
+        setCanReview(data.canReview || false);
+        setHasCompletedPurchase(data.hasCompletedPurchase || false);
       }
     } catch (err) {
       console.error('Error checking user review:', err);
     }
+  };
+
+  const handleWriteReviewClick = () => {
+    if (!currentUser) {
+      alert('Please log in to write a review.');
+      return;
+    }
+    
+    if (!hasCompletedPurchase) {
+      alert('You can only review products you have purchased and received (with completed transactions).');
+      return;
+    }
+    
+    setIsEditing(false);
+    setShowReviewForm(true);
   };
 
   const handleSubmitReview = async () => {
@@ -133,7 +153,7 @@ export default function ProductReviews({ productId }) {
             rating: newReview.rating,
             title: newReview.title,
             comment: newReview.comment,
-            verifiedPurchase: newReview.verifiedPurchase
+            verifiedPurchase: true // Will be set by backend based on completed transaction
           })
         });
         
@@ -211,7 +231,9 @@ export default function ProductReviews({ productId }) {
     filters: { display: 'flex', gap: '1rem', alignItems: 'center' },
     select: { padding: '0.7rem 1rem', borderRadius: '10px', border: '2px solid #e0e0e0', backgroundColor: 'white', color: '#333', fontSize: '0.95rem', cursor: 'pointer', fontFamily: "'Playfair Display', serif" },
     writeReviewButton: { backgroundColor: '#8b6914', color: 'white', padding: '0.8rem 2rem', borderRadius: '50px', border: 'none', fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.3s' },
+    writeReviewButtonDisabled: { backgroundColor: '#ccc', color: '#666', padding: '0.8rem 2rem', borderRadius: '50px', border: 'none', fontSize: '0.95rem', fontWeight: 600, cursor: 'not-allowed', opacity: 0.6 },
     editReviewButton: { backgroundColor: '#6c757d', color: 'white', padding: '0.8rem 2rem', borderRadius: '50px', border: 'none', fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.3s' },
+    purchaseNotice: { backgroundColor: '#fff3cd', color: '#856404', padding: '0.8rem 1.5rem', borderRadius: '10px', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' },
     reviewsList: { display: 'flex', flexDirection: 'column', gap: '2rem' },
     reviewCard: { backgroundColor: 'white', padding: '2rem', borderRadius: '15px', border: '1px solid #e0e0e0', transition: 'all 0.3s' },
     userReviewCard: { backgroundColor: '#faf8f3', border: '2px solid #8b6914' },
@@ -288,6 +310,12 @@ export default function ProductReviews({ productId }) {
         )}
       </div>
 
+      {currentUser && !hasCompletedPurchase && (
+        <div style={styles.purchaseNotice}>
+          ℹ️ You can write a review after purchasing and receiving this product (completed transaction required)
+        </div>
+      )}
+
       <div style={styles.controls}>
         <div style={styles.filters}>
           <select style={styles.select} value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
@@ -311,7 +339,13 @@ export default function ProductReviews({ productId }) {
               Edit Your Review
             </button>
           ) : (
-            <button style={styles.writeReviewButton} onClick={() => { if (!currentUser) { alert('Please log in to write a review.'); return; } setIsEditing(false); setShowReviewForm(true); }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#6d5010'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#8b6914'}>
+            <button 
+              style={hasCompletedPurchase ? styles.writeReviewButton : styles.writeReviewButtonDisabled} 
+              onClick={handleWriteReviewClick}
+              disabled={!hasCompletedPurchase}
+              onMouseOver={(e) => { if (hasCompletedPurchase) e.currentTarget.style.backgroundColor = '#6d5010'; }}
+              onMouseOut={(e) => { if (hasCompletedPurchase) e.currentTarget.style.backgroundColor = '#8b6914'; }}
+            >
               Write a Review
             </button>
           )}
